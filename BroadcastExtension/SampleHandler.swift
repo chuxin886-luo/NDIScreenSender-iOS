@@ -36,6 +36,7 @@ class SampleHandler: RPBroadcastSampleHandler {
     private var setupFailed = false
     private var frameCount = 0
     private var skipped = 0
+    private var stopWatcher: DispatchSourceTimer?
 
     // MARK: - 生命周期
 
@@ -47,13 +48,44 @@ class SampleHandler: RPBroadcastSampleHandler {
         frameCount = 0
         skipped = 0
 
-        NSLog("[NDI-BC] start transport=%@ preset=%@ fps=%d crop=%@ udp=%@:%d",
+        // 告诉主 App「已经在投屏了」，按钮会变成浅红色「停止投屏」
+        ConfigStore.clearStopRequest()
+        ConfigStore.setBroadcasting(true)
+        startStopWatcher()
+
+        NSLog("[NDI-BC] start transport=%@ preset=%@ fps=%d cropMode=%@ custom=%dx%d udp=%@:%d",
               config.transport.rawValue,
               config.outputPreset.rawValue,
               config.maxFPS,
-              NSCoder.string(for: config.cropRect),
+              config.cropMode.rawValue,
+              config.customWidth,
+              config.customHeight,
               config.udpHost,
               config.udpPort)
+    }
+
+    /// 轮询主 App 是否请求停止（App Group 不可用时不会触发）
+    private func startStopWatcher() {
+        stopWatcher?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
+        timer.setEventHandler { [weak self] in
+            guard self != nil else { return }
+            guard ConfigStore.isStopRequested else { return }
+            DispatchQueue.main.async {
+                self?.finishBroadcastWithError(
+                    NSError(domain: "NDIScreenSender", code: 0,
+                            userInfo: [NSLocalizedDescriptionKey: "已从 App 内停止投屏"])
+                )
+            }
+        }
+        timer.resume()
+        stopWatcher = timer
+    }
+
+    private func stopStopWatcher() {
+        stopWatcher?.cancel()
+        stopWatcher = nil
     }
 
     override func broadcastPaused() {
@@ -67,6 +99,9 @@ class SampleHandler: RPBroadcastSampleHandler {
 
     override func broadcastFinished() {
         NSLog("[NDI-BC] finish frames=%d skipped=%d", frameCount, skipped)
+        stopStopWatcher()
+        ConfigStore.setBroadcasting(false)
+        ConfigStore.clearStopRequest()
         teardown()
     }
 

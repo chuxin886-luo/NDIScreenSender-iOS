@@ -29,9 +29,14 @@ import argparse
 import ctypes
 import ctypes.util
 import os
+import queue
+import re
+import shutil
 import socket
 import struct
+import subprocess
 import sys
+import threading
 import time
 from collections import defaultdict
 
@@ -269,20 +274,38 @@ class Reassembler:
 # ─────────────────────────── 解码 + 发送 ───────────────────────────
 
 class H264Decoder:
-    """PyAV 的 h264 解码器封装，处理分辨率变化时重建"""
+    """
+    PyAV 的 h264 解码器封装。
+
+    为什么不用 ffmpeg 子进程：ffmpeg CLI 走的是 demuxer，从管道读 h264 时
+    要攒够探测数据才开始输出帧，实时场景下不可靠（实测 Windows 上会卡住）。
+    PyAV 直接调 avcodec_send_packet 逐包解码，没有这层缓冲。
+
+    对外接口与原来的 FFmpegDecoder 一致：feed() / get_frame() / close()
+    """
 
     def __init__(self):
-        import av
+        try:
+            import av
+        except ImportError:
+            raise RuntimeError(
+                "缺少 PyAV，无法解码 H.264。\n"
+                "  当前 Python: " + sys.version.split()[0] + "\n"
+                "  PyAV 官方 Windows 包覆盖 3.10~3.12 和 3.14，恰好跳过了 3.13。\n"
+                "  解决办法（二选一）：\n"
+                "    1) 装 Python 3.12 后运行：py -3.12 -m pip install av numpy\n"
+                "    2) 或换 3.14：py -3.14 -m pip install av numpy\n"
+            )
         self.av = av
+        self._frames = queue.Queue(maxsize=3)
         self.ctx = av.CodecContext.create("h264", "r")
         self._apply_low_delay()
         self.size = None
 
     def _apply_low_delay(self):
         """不同 PyAV 版本枚举名不一样（low_delay / LOW_DELAY），探测一下"""
-        import av
         for name in ("LOW_DELAY", "low_delay"):
-            flag = getattr(av.codec.context.Flags, name, None)
+            flag = getattr(self.av.codec.context.Flags, name, None)
             if flag is None:
                 continue
             try:
@@ -291,27 +314,71 @@ class H264Decoder:
                 pass
             break
 
-    def decode(self, data):
+    def feed(self, data):
+        """喂一包 Annex-B 数据；解出来的帧塞进内部队列"""
         try:
-            packet = self.av.Packet(data)
-            return self.ctx.decode(packet)
-        except Exception as exc:  # noqa: BLE001
-            # 丢包导致数据断裂时重置，等下一个关键帧
-            if type(exc).__name__ not in ("InvalidDataError",):
-                print(f"[AV] decode error: {exc}")
+            frames = self.ctx.decode(self.av.Packet(data))
+        except Exception:
+            # 丢包导致数据断裂：重置，等下一个关键帧
             self.reset()
-            return []
+            return
+        for f in frames:
+            try:
+                raw = f.to_ndarray(format="bgra").tobytes()
+            except Exception:
+                continue
+            wh = (f.width, f.height)
+            self.size = wh
+            try:
+                self._frames.put_nowait((raw, wh))
+            except queue.Full:
+                try:
+                    self._frames.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._frames.put_nowait((raw, wh))
+                except queue.Full:
+                    pass
+
+    def get_frame(self, timeout=0.2):
+        """返回 (bgra_bytes, (w, h)) 或 None"""
+        try:
+            return self._frames.get(timeout=timeout)
+        except queue.Empty:
+            return None
 
     def reset(self):
-        import av
-        self.ctx = av.CodecContext.create("h264", "r")
+        self.ctx = self.av.CodecContext.create("h264", "r")
         self._apply_low_delay()
         self.size = None
 
+    def close(self):
+        pass
+
 
 def frame_to_bgra(frame):
-    """PyAV frame → BGRA numpy，统一尺寸"""
+    """PyAV frame → BGRA numpy（备用接口）"""
     return frame.to_ndarray(format="bgra")
+
+
+
+def nal_types(data):
+    """扫描 Annex-B 流，返回每个 NAL 的 type（正常只应出现 1/5/7/8/9）"""
+    types = []
+    i, n = 0, len(data)
+    while i + 4 < n:
+        if data[i:i + 4] == b"\x00\x00\x00\x01":
+            types.append(data[i + 4] & 0x1F)
+            i += 5
+        elif data[i:i + 3] == b"\x00\x00\x01":
+            types.append(data[i + 3] & 0x1F)
+            i += 4
+        else:
+            i += 1
+        if len(types) > 32:      # 够用了，不扫全帧
+            break
+    return types
 
 
 def local_ipv4_list():
@@ -381,11 +448,18 @@ def run(args):
     print_connect_hint(args.port)
 
     reasm = Reassembler()
-    decoder = H264Decoder()
+
+    try:
+        decoder = H264Decoder()
+    except RuntimeError as exc:
+        print(f"✗ {exc}")
+        sender.destroy()
+        return 4
 
     last_report = time.time()
     got_first = False
     frames_out = 0
+    diag_count = 0
 
     try:
         while True:
@@ -409,8 +483,29 @@ def run(args):
                 continue
 
             annexb, is_key = result
-            for frame in decoder.decode(annexb):
-                arr = frame_to_bgra(frame)
+
+            # 诊断：前几帧打印 NAL 结构，用来判断码流是否损坏
+            # 正常 H.264 的 NAL type 只可能是 1(非IDR) 5(IDR) 6(SEI) 7(SPS) 8(PPS) 9(AUD)
+            if diag_count < 5:
+                diag_count += 1
+                types = nal_types(annexb)
+                ok = bool(types) and all(t in (1, 5, 6, 7, 8, 9) for t in types)
+                flag = "正常" if ok else "⚠ 异常（码流已损坏）"
+                print(f"[诊断] 帧{diag_count} key={is_key} {len(annexb)}B NAL={types} → {flag}")
+                if diag_count == 1 and is_key:
+                    if 7 not in types:
+                        print("[诊断] ⚠ 关键帧里没有 SPS(7)，解码器无法初始化")
+                    if 8 not in types:
+                        print("[诊断] ⚠ 关键帧里没有 PPS(8)")
+
+            # 喂给解码器，然后把解出来的帧全部取走发出去
+            decoder.feed(annexb)
+            while True:
+                got = decoder.get_frame(timeout=0.03 if frames_out < 5 else 0)
+                if got is None:
+                    break
+                raw, (fw, fh) = got
+                arr = np.frombuffer(raw, dtype=np.uint8).reshape(fh, fw, 4)
                 sender.send_bgra(arr)
                 frames_out += 1
 
@@ -425,6 +520,7 @@ def run(args):
         print("\n[退出] 收到 Ctrl+C")
     finally:
         sock.close()
+        decoder.close()
         sender.destroy()
     return 0
 

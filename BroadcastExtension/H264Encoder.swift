@@ -184,15 +184,22 @@ final class H264Encoder {
         let prefix = Int(nalLengthSize)
         var offset = 0
         while offset + prefix <= totalLength {
+            // ★ 逐字节组装长度前缀：CMBlockBuffer 的内存不保证 4 字节对齐，
+            //   用 withMemoryRebound(to: UInt32.self) 会读到错位数据，
+            //   导致 Annex-B 流损坏（解码端表现为彩虹条纹）
             var nalLen = 0
             if prefix == 4 {
-                nalLen = Int(UInt32(bigEndian: base.advanced(by: offset)
-                    .withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee }))
+                let b0 = UInt32(UInt8(bitPattern: base[offset]))
+                let b1 = UInt32(UInt8(bitPattern: base[offset + 1]))
+                let b2 = UInt32(UInt8(bitPattern: base[offset + 2]))
+                let b3 = UInt32(UInt8(bitPattern: base[offset + 3]))
+                nalLen = Int((b0 << 24) | (b1 << 16) | (b2 << 8) | b3)
             } else if prefix == 2 {
-                nalLen = Int(UInt16(bigEndian: base.advanced(by: offset)
-                    .withMemoryRebound(to: UInt16.self, capacity: 1) { $0.pointee }))
+                let b0 = UInt32(UInt8(bitPattern: base[offset]))
+                let b1 = UInt32(UInt8(bitPattern: base[offset + 1]))
+                nalLen = Int((b0 << 8) | b1)
             } else {
-                nalLen = Int(base[offset])
+                nalLen = Int(UInt8(bitPattern: base[offset]))
             }
             offset += prefix
             guard nalLen > 0, offset + nalLen <= totalLength else { break }

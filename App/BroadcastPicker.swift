@@ -50,12 +50,25 @@ struct PickerHost: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {}
 }
 
-/// 外观自定义、实际由系统 Picker 响应的「开始」按钮
+/// 外观自定义、实际由系统 Picker 响应的「开始 / 停止」按钮
 struct BroadcastStartButton: View {
-    /// 由调用方传入主题强调色，保持整体配色一致
+    /// 主题强调色（未投屏时）
     let accent: Color
+    /// 是否正在投屏
+    let isBroadcasting: Bool
+    /// 点击停止
+    let onStop: () -> Void
 
     @State private var proxy = PickerProxy()
+
+    /// 停止态用浅红
+    private var stopColor: Color {
+        Color(red: 0.85, green: 0.33, blue: 0.30)
+    }
+
+    private var activeColor: Color {
+        isBroadcasting ? stopColor : accent
+    }
 
     var body: some View {
         ZStack {
@@ -65,25 +78,30 @@ struct BroadcastStartButton: View {
                 .allowsHitTesting(false)
 
             Button {
-                proxy.trigger()
+                if isBroadcasting {
+                    onStop()
+                } else {
+                    proxy.trigger()
+                }
             } label: {
                 HStack(spacing: 9) {
-                    Image(systemName: "dot.radiowaves.left.and.right")
+                    Image(systemName: isBroadcasting ? "stop.fill" : "dot.radiowaves.left.and.right")
                         .font(.system(size: 16, weight: .semibold))
-                    Text("开始投屏")
+                    Text(isBroadcasting ? "停止投屏" : "开始投屏")
                         .font(.system(size: 16, weight: .semibold))
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
                 .background(
                     RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .fill(accent)
+                        .fill(activeColor)
                 )
                 .foregroundColor(.white)
-                .shadow(color: accent.opacity(0.25), radius: 8, x: 0, y: 3)
+                .shadow(color: activeColor.opacity(0.25), radius: 8, x: 0, y: 3)
             }
             .buttonStyle(PressableButtonStyle())
         }
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: isBroadcasting)
     }
 }
 

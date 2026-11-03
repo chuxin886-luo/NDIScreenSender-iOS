@@ -128,6 +128,8 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var scheme
     @State private var config: SenderConfig = ConfigStore.load()
     @State private var showAbout = false
+    @State private var isBroadcasting = false
+    @State private var pollTimer: Timer?
     @Namespace private var segNS
 
     private var t: Theme { Theme(scheme: scheme) }
@@ -172,6 +174,34 @@ struct ContentView: View {
         .onChange(of: config) { newValue in
             ConfigStore.save(newValue)
         }
+        .onAppear { startPolling() }
+        .onDisappear { stopPolling() }
+    }
+
+    // MARK: 广播状态轮询
+    // Extension 在 App Group 里写 broadcasting 标志，主 App 每秒读一次。
+    // 没有 App Group 时读不到，按钮会一直是「开始投屏」——这是签名限制，不是 bug。
+
+    private func startPolling() {
+        isBroadcasting = ConfigStore.isBroadcasting
+        pollTimer?.invalidate()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            let now = ConfigStore.isBroadcasting
+            if now != isBroadcasting {
+                withAnimation(Anim.select) { isBroadcasting = now }
+            }
+        }
+    }
+
+    private func stopPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
+    }
+
+    private func stopBroadcast() {
+        ConfigStore.requestStop()
+        // Extension 会在 0.5 秒内看到标志并自行结束；这里先乐观地改状态
+        withAnimation(Anim.select) { isBroadcasting = false }
     }
 
     // MARK: 顶部
@@ -234,11 +264,16 @@ struct ContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                BroadcastStartButton(accent: t.accent)
+                BroadcastStartButton(accent: t.accent,
+                                     isBroadcasting: isBroadcasting,
+                                     onStop: stopBroadcast)
 
-                Text("停止：回到此处，或在控制中心结束录屏")
+                Text(isBroadcasting
+                     ? "正在投屏 · 手机上滑回本 App 可随时停止"
+                     : "点上面的按钮 → 系统弹窗选「NDI 投屏」→ 开始")
                     .font(.system(size: 11.5))
                     .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity, alignment: .center)
             }
         }
@@ -369,38 +404,132 @@ struct ContentView: View {
 
     // MARK: 裁剪
 
+    /// 屏幕物理像素尺寸（用于预览与像素模式换算）
+    private var screenPixelSize: CGSize {
+        let b = UIScreen.main.bounds
+        let s = UIScreen.main.scale
+        return CGSize(width: b.width * s, height: b.height * s)
+    }
+
+    private var previewRect: CGRect {
+        config.normalizedPreviewRect(forPixelSize: screenPixelSize)
+    }
+
     private var cropCard: some View {
         Card(t: t, title: "画面裁剪", icon: "crop", tint: t.iconOrange) {
             VStack(spacing: 16) {
-                CropPreview(rect: config.cropRect, t: t)
+
+                // 模式切换：按尺寸（居中） / 按比例
+                HStack(spacing: 4) {
+                    cropModeItem("按尺寸（居中）", .pixels)
+                    cropModeItem("按比例", .ratio)
+                }
+                .padding(4)
+                .background(t.field)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                CropPreview(rect: previewRect, t: t)
                     .frame(height: 156)
-                    .animation(Anim.drag, value: config.cropRect)
+                    .animation(Anim.drag, value: previewRect)
 
-                VStack(spacing: 13) {
-                    percentSlider("左边距", value: $config.cropRect.origin.x, range: 0...0.9)
-                    percentSlider("上边距", value: $config.cropRect.origin.y, range: 0...0.9)
-                    percentSlider("宽度", value: $config.cropRect.size.width, range: 0.1...1.0)
-                    percentSlider("高度", value: $config.cropRect.size.height, range: 0.1...1.0)
+                if config.cropMode == .pixels {
+                    pixelSizeEditor
+                } else {
+                    VStack(spacing: 13) {
+                        percentSlider("左边距", value: $config.cropRect.origin.x, range: 0...0.9)
+                        percentSlider("上边距", value: $config.cropRect.origin.y, range: 0...0.9)
+                        percentSlider("宽度", value: $config.cropRect.size.width, range: 0.1...1.0)
+                        percentSlider("高度", value: $config.cropRect.size.height, range: 0.1...1.0)
+                    }
+                    HStack(spacing: 8) {
+                        quickButton("全屏") {
+                            animateCrop(CGRect(x: 0, y: 0, width: 1, height: 1))
+                        }
+                        quickButton("居中 16:9") {
+                            let h: CGFloat = min(1.0, 9.0 / 16.0)
+                            animateCrop(CGRect(x: 0, y: (1 - h) / 2, width: 1, height: h))
+                        }
+                        quickButton("上半屏") {
+                            animateCrop(CGRect(x: 0, y: 0, width: 1, height: 0.5))
+                        }
+                    }
                 }
 
-                HStack(spacing: 8) {
-                    quickButton("全屏") {
-                        animateCrop(CGRect(x: 0, y: 0, width: 1, height: 1))
-                    }
-                    quickButton("居中 16:9") {
-                        let h: CGFloat = min(1.0, 9.0 / 16.0)
-                        animateCrop(CGRect(x: 0, y: (1 - h) / 2, width: 1, height: h))
-                    }
-                    quickButton("上半屏") {
-                        animateCrop(CGRect(x: 0, y: 0, width: 1, height: 0.5))
-                    }
-                }
-
-                Text("裁剪越小 → 编码越快 → 延迟越低")
+                Text(config.cropMode == .pixels
+                     ? "以屏幕中心为基准取框，超出画面会自动夹取"
+                     : "裁剪越小 → 编码越快 → 延迟越低")
                     .font(.system(size: 11.5))
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+        }
+    }
+
+    private func cropModeItem(_ title: String, _ mode: CropMode) -> some View {
+        let selected = config.cropMode == mode
+        return ZStack {
+            if selected {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(t.card)
+                    .matchedGeometryEffect(id: "cropMode", in: segNS)
+                    .shadow(color: Color.black.opacity(t.isDark ? 0.30 : 0.07),
+                            radius: 2, x: 0, y: 1)
+            }
+            Text(title)
+                .font(.system(size: 12.5, weight: selected ? .semibold : .regular))
+                .foregroundColor(selected ? t.accent : Color.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 32)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !selected else { return }
+            withAnimation(Anim.select) { config.cropMode = mode }
+        }
+    }
+
+    private var pixelSizeEditor: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 10) {
+                numberField("宽", value: $config.customWidth)
+                Text("×")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(.secondary)
+                numberField("高", value: $config.customHeight)
+            }
+
+            HStack(spacing: 8) {
+                quickButton("960×540") { setCustomSize(960, 540) }
+                quickButton("1280×720") { setCustomSize(1280, 720) }
+                quickButton("全屏") {
+                    let s = screenPixelSize
+                    setCustomSize(Int(s.width), Int(s.height))
+                }
+            }
+        }
+    }
+
+    private func numberField(_ label: String, value: Binding<Int>) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+            TextField("0", value: value, format: .number)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.trailing)
+                .font(.system(size: 15, weight: .medium, design: .monospaced))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(t.field)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .frame(maxWidth: 110)
+        }
+    }
+
+    private func setCustomSize(_ w: Int, _ h: Int) {
+        withAnimation(Anim.expand) {
+            config.customWidth = max(16, w)
+            config.customHeight = max(16, h)
         }
     }
 
