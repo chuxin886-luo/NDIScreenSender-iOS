@@ -10,14 +10,22 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    # XcodeGen 生成的是 Xcode 16 格式（objectVersion 77），
+    # macos-14 只带 Xcode 15.4，读不了 → 必须用 macos-15
+    runs-on: macos-15
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: 环境信息
+      - name: 选择最新 Xcode 并输出环境
         run: |
+          set -e
+          ls -d /Applications/Xcode*.app || true
+          LATEST=$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)
+          echo "使用 $LATEST"
+          sudo xcode-select -s "$LATEST"
+          echo "---- 版本 ----"
           xcodebuild -version
           sw_vers
 
@@ -35,6 +43,21 @@ jobs:
 
       - name: 生成 Xcode 工程
         run: xcodegen generate
+
+      # 双保险：万一 runner 上还是旧版 Xcode，把项目格式降到它能读的版本
+      - name: 项目格式兼容性处理
+        run: |
+          set -e
+          MAJOR=$(xcodebuild -version | head -n1 | sed -E 's/Xcode ([0-9]+).*/\1/')
+          echo "Xcode 主版本: $MAJOR"
+          P="NDIScreenSender.xcodeproj/project.pbxproj"
+          if [ "$MAJOR" -lt 16 ]; then
+            echo "→ Xcode < 16，把 objectVersion 降到 56"
+            sed -i '' 's/objectVersion = [0-9]*;/objectVersion = 56;/' "$P"
+          else
+            echo "→ Xcode >= 16，保持原格式"
+          fi
+          grep -m1 objectVersion "$P" || true
 
       - name: 编译（不签名，不需要开发者账号）
         run: |
@@ -73,6 +96,8 @@ jobs:
           path: NDIScreenSender-unsigned.ipa
           retention-days: 30
 
+      # 发一个 Release：Public 仓库的 Release 资产是公开直链，
+      # 而 Artifact 必须登录 GitHub 才能下。这样 iPad 上可以直接点下载。
       - name: 发布 Release（供 iPad 直接下载）
         uses: softprops/action-gh-release@v2
         with:
