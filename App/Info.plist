@@ -22,6 +22,12 @@
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!--
+	  解锁 ProMotion 全帧率。iOS 15 起，iPhone 上默认把 CA 动画限制在 60Hz，
+	  设为 true 才允许 120Hz 设备跑满刷新率（影响所有 SwiftUI / CoreAnimation 动画）。
+	-->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

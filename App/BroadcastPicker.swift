@@ -52,6 +52,9 @@ struct PickerHost: UIViewRepresentable {
 
 /// 外观自定义、实际由系统 Picker 响应的「开始」按钮
 struct BroadcastStartButton: View {
+    /// 由调用方传入主题强调色，保持整体配色一致
+    let accent: Color
+
     @State private var proxy = PickerProxy()
 
     var body: some View {
@@ -64,18 +67,33 @@ struct BroadcastStartButton: View {
             Button {
                 proxy.trigger()
             } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: 9) {
                     Image(systemName: "dot.radiowaves.left.and.right")
-                    Text("开始 NDI 投屏")
-                        .fontWeight(.semibold)
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("开始投屏")
+                        .font(.system(size: 16, weight: .semibold))
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(Color.accentColor)
+                .padding(.vertical, 15)
+                .background(
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(accent)
+                )
                 .foregroundColor(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .shadow(color: accent.opacity(0.25), radius: 8, x: 0, y: 3)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
         }
+    }
+}
+
+/// 按下时轻微缩放 + 变淡，用 spring 让回弹不生硬
+struct PressableButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.972 : 1.0)
+            .opacity(configuration.isPressed ? 0.92 : 1.0)
+            .animation(.spring(response: 0.26, dampingFraction: 0.72),
+                       value: configuration.isPressed)
     }
 }
