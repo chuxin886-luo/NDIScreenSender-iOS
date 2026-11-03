@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 主 App 与 Broadcast Extension 共享配置，两边必须一字不差 -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.yourname.ndisender</string>
+	</array>
+
+	<!--
+	  ★ NDI 的核心依赖：没有它，sender 无法向 239.x.x.x 发 mDNS 广播，
+	    接收端就「看不见」这个源。
+
+	  这个 entitlement 需要向 Apple 单独申请（Multicast Networking Entitlement Request），
+	  审批通过在开发者账号里生成对应 profile 后才可用。
+	  拿不到时的替代路径见 README「三种签名路径」。
+	-->
+	<key>com.apple.developer.networking.multicast</key>
+	<true/>
+</dict>
+</plist>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 必须与主 App 的 App Group 完全一致，否则 Extension 读不到裁剪配置 -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.yourname.ndisender</string>
+	</array>
+
+	<!-- NDI 组播广播权限：Extension 里发流同样需要 -->
+	<key>com.apple.developer.networking.multicast</key>
+	<true/>
+</dict>
+</plist>

@@ -1,0 +1,83 @@
+# XcodeGen 工程描述
+# 安装：brew install xcodegen
+# 生成：在本目录执行 `xcodegen generate`，得到 NDIScreenSender.xcodeproj
+#
+# ── UDP 模式（没有开发者账号 / 不想装 NDI SDK）──
+# 把下面三处 NDI 相关的东西去掉即可，工程完全不依赖 NDI：
+#   1. settings.base 里的 GCC_PREPROCESSOR_DEFINITIONS 中的 NDI_ENABLED=1
+#   2. 两个 target 的 SWIFT_ACTIVE_COMPILATION_CONDITIONS 里的 NDI_ENABLED
+#   3. 两个 target 的 dependencies 里的 NDI xcframework
+name: NDIScreenSender
+
+options:
+  bundleIdPrefix: com.yourname
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+  groupSortPosition: none
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+    ENABLE_BITCODE: NO
+    CLANG_CXX_LANGUAGE_STANDARD: "c++17"
+    OTHER_LDFLAGS: ["-lc++"]
+    # NDI 模式开关（删掉这一行即彻底关闭 NDI，见文件头说明）
+    GCC_PREPROCESSOR_DEFINITIONS: "$(inherited) NDI_ENABLED=1"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+
+  # ───────────────────────── 主 App ─────────────────────────
+  NDIScreenSender:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yourname.ndisender
+        PRODUCT_NAME: NDIScreenSender
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/NDIScreenSender.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: NDI/NDIBridge.h
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/NDI/include
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) NDI_ENABLED"
+        TARGETED_DEVICE_FAMILY: "1,2"          # iPhone + iPad
+    dependencies:
+      - target: NDIBroadcast
+        embed: true
+        codeSign: true
+      # ↓ UDP 模式请注释掉这三行
+      - framework: NDI/libndi_advanced_ios.xcframework
+        embed: false
+        link: true
+
+  # ──────────────── 系统录屏广播扩展 ────────────────
+  NDIBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: BroadcastExtension
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yourname.ndisender.BroadcastExtension
+        PRODUCT_NAME: NDIBroadcast
+        INFOPLIST_FILE: BroadcastExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: BroadcastExtension/NDIBroadcast.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: NDI/NDIBridge.h
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/NDI/include
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) NDI_ENABLED"
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+    dependencies:
+      # ↓ UDP 模式请注释掉这三行
+      - framework: NDI/libndi_advanced_ios.xcframework
+        embed: false
+        link: true

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>投屏延迟测量钟</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    background: #000; overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #wrap {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    height: 100%; width: 100%;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  #clock {
+    display: flex; align-items: baseline;
+    font-weight: 800; line-height: 1;
+    letter-spacing: -0.02em;
+  }
+  #hms  { font-size: 15vw; color: #00ff6a; }
+  #ms   { font-size: 8vw;  color: #00e5ff; min-width: 4.2ch; }
+  #hint {
+    margin-top: 4vh; font-size: 2.2vw; color: #666;
+    text-align: center; line-height: 1.6; padding: 0 4vw;
+  }
+  #mark {
+    position: fixed; left: 0; top: 0; width: 100%; height: 6px;
+    background: #00ff6a; opacity: .9;
+    transition: background-color 80ms linear;
+  }
+</style>
+</head>
+<body>
+<div id="mark"></div>
+<div id="wrap">
+  <div id="clock">
+    <span id="hms">00:00:00</span>
+    <span id="ms">.000</span>
+  </div>
+  <div id="hint">手机和电脑各开一个本页面，对比两屏毫秒差 = 端到端延迟</div>
+</div>
+
+<script>
+(function () {
+  var hmsEl = document.getElementById('hms');
+  var msEl  = document.getElementById('ms');
+  var mark  = document.getElementById('mark');
+  var hint  = document.getElementById('hint');
+
+  var last = -1;
+  var huePhase = 0;
+
+  function pad(n, w) {
+    var s = String(n);
+    while (s.length < w) s = '0' + s;
+    return s;
+  }
+
+  function tick() {
+    var d = new Date();
+    var h = d.getHours(), m = d.getMinutes(), s = d.getSeconds(), x = d.getMilliseconds();
+
+    // 只在毫秒变化时改 DOM，减少重排
+    if (x !== last) {
+      last = x;
+      hmsEl.textContent = pad(h, 2) + ':' + pad(m, 2) + ':' + pad(s, 2);
+      msEl.textContent = '.' + pad(x, 3);
+
+      // 每 20ms 变一次色，肉眼看得出「在跑」，也方便照片里定位同一时刻
+      huePhase = (Math.floor(x / 20) * 18) % 360;
+      mark.style.background = 'hsl(' + huePhase + ', 100%, 55%)';
+    }
+    requestAnimationFrame(tick);
+  }
+
+  // 点击全屏（iOS 需要手势触发）
+  document.body.addEventListener('click', function () {
+    var el = document.documentElement;
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+    } else if (el.requestFullscreen) {
+      el.requestFullscreen().catch(function(){});
+    } else if (el.webkitRequestFullscreen) {
+      el.webkitRequestFullscreen();
+    }
+  });
+
+  // 提示分辨率，确认两屏一致（不一致也没关系，毫秒是同步的）
+  hint.textContent = '屏幕 ' + window.screen.width + '×' + window.screen.height +
+                     '　点一下画面可全屏　' +
+                     '两屏毫秒差 = 端到端延迟';
+
+  tick();
+})();
+</script>
+</body>
+</html>
